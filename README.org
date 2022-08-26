@@ -1,2 +1,7 @@
 
-make an HTTP from scratch.
+# info
+build an HTTP from scratch.
+
+
+# Guide
+[[https://gufeijun.com/post/httpframe/1/][go语言从0实现net/http标准库]]

@@ -1,30 +1,44 @@
 package main
 
 import (
+	"build-HTTP-from-scracth/pkg/httptoy"
+	"bytes"
 	"fmt"
-	"log"
-	"net/http"
-	"strings"
+	"io"
 )
 
-func sayhelloName(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()       // 解析参数，默认是不会解析的
-	fmt.Println(r.Form) // 这些信息是输出到服务器端的打印信息
-	fmt.Println("path", r.URL.Path)
-	fmt.Println("scheme", r.URL.Scheme)
-	fmt.Println(r.Form["url_long"])
-	
-	for k, v := range r.Form {
-		fmt.Println("key:", k)
-		fmt.Println("val:", strings.Join(v, ""))
-	}
-	fmt.Fprintf(w, "Hello world!") // 这个写入到 w 的是输出到客户端的
+type myHandler struct{}
+
+func (*myHandler) ServeHTTP(req *httptoy.Request, res httptoy.ResponseWriter) {
+
+	// 用户的头部信息保存到buff中
+	buff := &bytes.Buffer{}
+	// 测试Request的解析
+	// fmt.Fprintf(buff, "[query]name=%s\n", req.Query("name"))
+	// fmt.Fprintf(buff, "[query]token=%s\n", req.Query("token"))
+	// fmt.Fprintf(buff, "[cookie]foo1=%s\n", req.Cookie("foo1"))
+	// fmt.Fprintf(buff, "[cookie]foo2=%s\n", req.Cookie("foo2"))
+	// fmt.Fprintf(buff, "[Header]User-Agent=%s\n", req.Header.Get("User-Agent"))
+	// fmt.Fprintf(buff, "[Header]Proto=%s\n", req.Proto)
+	// fmt.Fprintf(buff, "[Header]Method=%s\n", req.Method)
+	// fmt.Fprintf(buff, "[Addr]Addr=%s\n", req.RemoteAddr)
+
+	fmt.Fprintf(buff, "[Request] Header:%v\n", req.Header)
+
+	//手动发送响应报文
+	io.WriteString(res, "HTTP/1.1 200 OK\r\n")
+	io.WriteString(res, fmt.Sprintf("Content-Length: %d\r\n", buff.Len()))
+	io.WriteString(res, "\r\n")
+	io.Copy(res, buff) //将buff缓存数据发送给客户端
+
 }
 
 func main() {
-	http.HandleFunc("/", sayhelloName)       // 设置访问的路由
-	err := http.ListenAndServe(":9090", nil) // 设置监听的端口
-	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
+	fmt.Println("localhost:8080")
+
+	svr := &httptoy.Server{
+		Addr:    "127.0.0.1:8080",
+		Handler: new(myHandler),
 	}
+	panic(svr.ListenAndServe())
 }
