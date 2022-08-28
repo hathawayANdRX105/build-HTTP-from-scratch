@@ -39,7 +39,9 @@ type Request struct {
 	Proto     string // 协议以及版本
 
 	// 首部字段
-	Header Header // 首部字段
+	Header      Header // 首部字段
+	contentType string // 解析报文内容的类型
+	boundary    string // from-data的边界
 
 	// 报文主体
 	URL         *url.URL          // url
@@ -98,6 +100,7 @@ func (r *Request) parseQuery() {
 }
 
 // readHeader 用来解析 header 首部字段
+// ex: Content-Length: 13
 func readHeader(bufr *bufio.Reader) (Header, error) {
 	header := make(Header)
 
@@ -169,6 +172,42 @@ func (r *Request) parseCookies() {
 
 }
 
+// parseContentType 主要解析 content-type, 根据情况 解析 boudanry
+// Content-Type: multipart/form-data; boundary=------974767299852498929531610575
+// Content-Type: multipart/form-data; boundary=""------974767299852498929531610575"
+// Content-Type: application/x-www-form-urlencoded
+func (r *Request) parseContentType() {
+	// 1.解析 content-type
+	ct := r.Header.Get("Content-Type")
+	pivot := strings.IndexByte(ct, ';')
+	// 如果没找到 ; 说明content-type 不是 from-data, 直接保存
+	if pivot < 0 {
+		r.contentType = ct
+	}
+	// pivot 在最后一位，可能解析失败，直接退出
+	if pivot == len(ct)-1 {
+		return
+	}
+	r.contentType = ct[:pivot]
+
+	// 2.解析 boudnary
+	sStr := strings.Split(ct[pivot+1:], "=")
+	// exit cond: sStr 长度小于2 或者 第一个子串 不是 “boundary”
+	if len(sStr) < 2 || strings.TrimSpace(sStr[0]) != "boundary" {
+		return
+	}
+	r.boundary = strings.Trim(sStr[1], `"`)
+}
+
+// MultiplartReader 用于读取 multipart表单
+func (r *Request) MultipartReader() (*MultipartReader, error) {
+	if len(r.boundary) < 1 {
+		return nil, errors.New("No boundary detected.")
+	}
+
+	return NewMultipartReader(r.Body, r.boundary), nil
+}
+
 // eofReader 用来读取报文主体的
 type eofReader struct{}
 
@@ -215,6 +254,8 @@ func (r *Request) fixExpectContinueReader() {
 	}
 }
 
+// setupBody 为连接提供读取流对象，只有put跟post请求能够创建相应的读取流
+// chunkReader 以及 LimitReader 根据客户端情况进行创建，以及请求报文的预处理 100 continue
 func (r *Request) setupBody() {
 	// 按照http协议，除了POST和PUT以外的方法不允许设置报文主体
 	switch r.Method {
@@ -278,7 +319,10 @@ func readRequest(c *conn) (*Request, error) {
 		return nil, err
 	}
 
-	// 5.读取body
+	// 5.根据 Content-Type字段进行报文解析
+	r.parseContentType()
+
+	// 6.设置 body 读取流
 	r.conn.lr.N = (1<<63 - 1) // 设置body读取无需限制
 	r.setupBody()
 

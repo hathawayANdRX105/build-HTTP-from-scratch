@@ -6,7 +6,24 @@ import (
 	"io"
 )
 
-// chunkReader.go 针对 Request.setupBody 对 chunk编码的读取解码
+// chunkReader.go 针对 Request.setupBody 对 r.Body 的 chunk编码的读取解码
+/* chunk 编码示例：
+ * HTTP/1.1 200 OK\r\n
+ * Content-Type: text/plain\r\n
+ * Transfer-Encoding: chunked\r\n
+ * \r\n
+ *
+ * # 以下为body
+ * 17\r\n							#chunk size
+ * hello, this is chunked \r\n		#chunk data
+ * D\r\n							#chunk size
+ * data sent by \r\n				#chunk data
+ * 7\r\n							#chunk size
+ * client!\r\n						#chunk data
+ * 0\r\n\r\n						#end
+ */
+// chunk size 由十六进制表示
+// chunk data 对应 chunk size 长度的数据
 
 type chunkReader struct {
 	n    int           // 当前处理的块中还有多少字节未读

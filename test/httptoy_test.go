@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -77,19 +79,86 @@ func TestRequestBody(t *testing.T) {
 			return
 		}
 
-		const prefix = "your message:"
 		io.WriteString(res, "HTTP/1.1 200 OK\r\n")
-		io.WriteString(res, fmt.Sprintf("Content-Length: %d\r\n", len(buf)+len(prefix)))
+		io.WriteString(res, fmt.Sprintf("Content-Length: %d\r\n", len(buf)))
 		io.WriteString(res, "\r\n")
-		io.WriteString(res, prefix)
 		res.Write(buf)
 
 		// 查看 header
-		// io.WriteString(res, "\r\n")
-		// buff := &bytes.Buffer{}
-		// fmt.Fprintln(buff, "Header:", req.Header)
-		// io.Copy(res, buff)
+		io.WriteString(res, "\r\n")
+		buff := &bytes.Buffer{}
+		_, err = fmt.Fprint(buff, "\nHeader:", req.Header)
+		if err != nil {
+			fmt.Println(err)
+		}
+		fmt.Println(req.Header)
 
+		_, err = io.Copy(res, buff)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+
+	svr := &httptoy.Server{
+		Addr:    "127.0.0.1:8080",
+		Handler: th,
+	}
+	panic(svr.ListenAndServe())
+}
+
+// TestMultipartReader 用于测试 MultipartReader
+// 任意目录下传输 1.txt, 2.txt.
+// cmd：curl -F "username=gu" -F "password=123" -F "file1=@1.txt" -F "file2=@2.txt" http://127.0.0.1:8080
+func TestMultipartReader(t *testing.T) {
+
+	th := new(testHandler)
+	th.F = func(req *httptoy.Request, res httptoy.ResponseWriter) {
+		mr, err := req.MultipartReader()
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		var part *httptoy.Part
+	label:
+		for {
+			part, err = mr.NextPart()
+			if err != nil {
+				break
+			}
+			// 判断是文本part还是文件part
+			switch part.FileName() {
+			case "": //文本
+				fmt.Printf("FormName=%s, FormData:\n", part.FormName())
+				// 输出到终端
+				if _, err = io.Copy(os.Stdout, part); err != nil {
+					break label
+				}
+				fmt.Println()
+			default: //文件
+				// 打印文件信息
+				fmt.Printf("FormName=%s, FileName=%s\n", part.FormName(), part.FileName())
+
+				// 创建文件
+				var file *os.File
+				if file, err = os.Create(part.FileName()); err != nil {
+					break label
+				}
+				if _, err = io.Copy(file, part); err != nil {
+					file.Close()
+					break label
+				}
+				file.Close()
+			}
+		}
+		if err != io.EOF {
+			fmt.Println(err)
+		}
+
+		// 发送响应报文
+		io.WriteString(res, "HTTP/1.1 200 OK\r\n")
+		io.WriteString(res, fmt.Sprintf("Content-Length: %d\r\n", 0))
+		io.WriteString(res, "\r\n")
 	}
 
 	svr := &httptoy.Server{
