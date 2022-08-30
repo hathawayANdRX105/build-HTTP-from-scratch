@@ -50,6 +50,13 @@ type Request struct {
 	cookies     map[string]string // 客户端cookies
 	queryString map[string]string // 请求的url 询问键值对
 	Body        io.Reader         // 用于读取报文的io
+
+	// 特殊表单处理
+	// 需要 ParseForm 调用之后才能直接调用 PostForm 以及 MultipartForm
+	PostForm      map[string]string
+	MultipartForm *MultipartForm
+	hadParsedForm bool
+	parseFromErr  error
 }
 
 // readLine 包装 bufr.ReadLine(), 保证请求行完整，直到 \r\n
@@ -95,16 +102,12 @@ func parseQuery(RawQuery string) map[string]string {
 	return queries
 }
 
-func (r *Request) parseQuery() {
-	r.queryString = parseQuery(r.URL.RawQuery)
-}
-
 // readHeader 用来解析 header 首部字段
-// ex: Content-Length: 13
+// E.g. Content-Length: 13
 func readHeader(bufr *bufio.Reader) (Header, error) {
 	header := make(Header)
 
-	// ex: Content-Type: text/plain\r\n
+	// E.g. Content-Type: text/plain\r\n
 	for {
 		// 利用 readLine 读完整的一行 \r\n
 		line, err := readLine(bufr)
@@ -172,6 +175,7 @@ func (r *Request) parseCookies() {
 
 }
 
+// 特殊表单的解析处理 parsePostForm, parseMultipartForm
 // parseContentType 主要解析 content-type, 根据情况 解析 boudanry
 // Content-Type: multipart/form-data; boundary=------974767299852498929531610575
 // Content-Type: multipart/form-data; boundary=""------974767299852498929531610575"
@@ -183,6 +187,7 @@ func (r *Request) parseContentType() {
 	// 如果没找到 ; 说明content-type 不是 from-data, 直接保存
 	if pivot < 0 {
 		r.contentType = ct
+		return
 	}
 	// pivot 在最后一位，可能解析失败，直接退出
 	if pivot == len(ct)-1 {
@@ -206,6 +211,49 @@ func (r *Request) MultipartReader() (*MultipartReader, error) {
 	}
 
 	return NewMultipartReader(r.Body, r.boundary), nil
+}
+
+// parse-form 1:parsePostForm Post表单的数据类似 queryString ，直接用 parseQuery 解析
+// E.g. name=jack&age=22
+func (r *Request) parsePostForm() error {
+	bb, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+
+	r.PostForm = parseQuery(string(bb))
+	return nil
+}
+
+// parse-form 2:parseMultipartForm multipart表单 创建文件流对象保存数据，让handler调用
+func (r *Request) parseMultipartForm() error {
+	mr, err := r.MultipartReader()
+	if err != nil {
+		return err
+	}
+
+	r.MultipartForm, err = mr.ReadForm()
+	r.PostForm = r.MultipartForm.Value // postForm也可以通过multipart表单文本数据解析
+	return nil
+}
+
+// ParseForm ...
+func (r *Request) ParseForm() error {
+	if r.Method != "POST" && r.Method != "PUT" { // 排除掉没有body的表单解析
+		return errors.New("Missing form body.")
+	}
+
+	r.hadParsedForm = true
+
+	// 根据 contenType 进行解析表单
+	switch r.contentType {
+	case "application/x-www-form-urlencoded":
+		return r.parsePostForm()
+	case "multipart/form-data":
+		return r.parseMultipartForm()
+	}
+
+	return errors.New("Unsupport form type.")
 }
 
 // eofReader 用来读取报文主体的
@@ -234,11 +282,6 @@ func (ecr *expectContinueReader) Read(p []byte) (int, error) {
 
 	// 继承 setupBody 的 chunked 编码读取流 或 限制流，作为中介
 	return ecr.r.Read(p)
-}
-
-// chunked 检查 conn 连接是否为chunk 编码读取
-func (r *Request) chunked() bool {
-	return r.Header.Get("Transfer-Encoding") == "chunked"
 }
 
 // fixExpectContinueReader 包装 r.Body，包装成发送 100 continue的特殊流
@@ -272,7 +315,7 @@ func (r *Request) setupBody() {
 			defer r.fixExpectContinueReader()
 
 			// chunk 编码读取
-			if r.chunked() {
+			if r.Header.Get("Transfer-Encoding") == "chunked" {
 				r.Body = &chunkReader{bufr: r.conn.bufr}
 				return
 			}
@@ -311,7 +354,7 @@ func readRequest(c *conn) (*Request, error) {
 	}
 
 	// 3.解析queryString
-	r.parseQuery()
+	r.queryString = parseQuery(r.URL.RawQuery)
 
 	// 4.解析首部字段
 	r.Header, err = readHeader(c.bufr)
@@ -331,9 +374,15 @@ func readRequest(c *conn) (*Request, error) {
 
 // finishRequest 处理 Request 两个缓冲流的资源过剩, 写完与读完, 将由 server 调用
 func (r *Request) finishRequest() error {
+	// 将可能保存的临时文件删除
+	if r.MultipartForm != nil {
+		r.MultipartForm.RemoveAll()
+	}
+
 	// 将缓冲输出流中的剩余数据发送
 	err := r.conn.bufw.Flush()
 
+	// 消费完Body剩余的数据
 	if err == nil {
 		// 同样的，r.Body 可能存在未读完的资源导致 conn 不能关闭
 		// 因此使用 io.Copy 将 r.Body 全部读取出来， ioutil.Discard 只会读取不做其他事
@@ -358,4 +407,36 @@ func (r *Request) Cookie(key string) string {
 	}
 
 	return r.cookies[key]
+}
+
+// PostFormValue 用来做单次查询
+func (r *Request) PostFormValue(key string) string {
+	if !r.hadParsedForm { // lazy-parse
+		r.parseFromErr = r.ParseForm()
+	}
+
+	// 如果出现 error 或者 没有 postForm 则返回空字符串
+	if r.parseFromErr != nil || r.PostForm == nil {
+		return ""
+	}
+
+	return r.PostForm[key]
+}
+
+// FormFile 用来查询某个名字的文件
+func (r *Request) FormFile(filename string) (*FileHeader, error) {
+	if !r.hadParsedForm { // lazy-parse
+		r.parseFromErr = r.ParseForm()
+	}
+
+	if r.parseFromErr != nil || r.MultipartForm == nil {
+		return nil, r.parseFromErr
+	}
+
+	fh, ok := r.MultipartForm.File[filename]
+	if !ok { // 如果文件保存失败
+		return nil, errors.New("http: missing multipart file")
+	}
+
+	return fh, nil
 }

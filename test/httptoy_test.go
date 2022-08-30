@@ -167,3 +167,83 @@ func TestMultipartReader(t *testing.T) {
 	}
 	panic(svr.ListenAndServe())
 }
+
+// 测试FormFile。 将文件文本输出到终端
+// cmd : curl -F "file1=@1.txt" http://127.0.0.1:8080/test1
+func handleTest1(req *httptoy.Request, res httptoy.ResponseWriter) (err error) {
+	fh, err := req.FormFile("file1")
+	if err != nil {
+		return
+	}
+	rc, err := fh.Open()
+	if err != nil {
+		return
+	}
+	defer rc.Close()
+	buf, err := ioutil.ReadAll(rc)
+	if err != nil {
+		return
+	}
+	fmt.Printf("%s\n", buf)
+	return
+}
+
+// 测试Save。 将文件保存到硬盘
+// cmd :  curl -F "file1=@1.txt" -F "file2=@2.txt" http://127.0.0.1/test2
+func handleTest2(req *httptoy.Request, res httptoy.ResponseWriter) (err error) {
+	if err = req.ParseForm(); err != nil {
+		return
+	}
+
+	mr := req.MultipartForm
+	for _, fh := range mr.File {
+		err = fh.Save(fh.Filename)
+		if err == nil {
+			fmt.Printf("file %v saved.\n", fh.Filename)
+		}
+	}
+
+	return err
+}
+
+// 测试PostForm
+// cmd : curl -d "foo1=bar1&foo2=bar2" http://127.0.0.1/test3
+func handleTest3(req *httptoy.Request, res httptoy.ResponseWriter) (err error) {
+
+	value1 := req.PostFormValue("foo1")
+	value2 := req.PostFormValue("foo2")
+	fmt.Printf("post form :%v\n", req.PostForm)
+	fmt.Printf("foo1=%s,foo2=%s\n", value1, value2)
+
+	return nil
+}
+
+func TestParseForm(t *testing.T) {
+	th := new(testHandler)
+	th.F = func(req *httptoy.Request, res httptoy.ResponseWriter) {
+		var err error
+
+		switch req.URL.Path {
+		case "/test1":
+			err = handleTest1(req, res)
+		case "/test2":
+			err = handleTest2(req, res)
+		case "/test3":
+			err = handleTest3(req, res)
+		}
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		// 手动构建响应报文
+		io.WriteString(res, "HTTP/1.1 200 OK\r\n")
+		io.WriteString(res, fmt.Sprintf("Content-Length: %d\r\n", 0))
+		io.WriteString(res, "\r\n")
+	}
+
+	svr := &httptoy.Server{
+		Addr:    "127.0.0.1:80",
+		Handler: th,
+	}
+	panic(svr.ListenAndServe())
+}
