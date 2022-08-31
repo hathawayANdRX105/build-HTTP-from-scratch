@@ -204,10 +204,10 @@ func (r *Request) parseContentType() {
 	r.boundary = strings.Trim(sStr[1], `"`)
 }
 
-// MultiplartReader 用于读取 multipart表单
+// MultipartReader 用于读取 multipart表单
 func (r *Request) MultipartReader() (*MultipartReader, error) {
 	if len(r.boundary) < 1 {
-		return nil, errors.New("No boundary detected.")
+		return nil, errors.New("no boundary detected")
 	}
 
 	return NewMultipartReader(r.Body, r.boundary), nil
@@ -253,7 +253,7 @@ func (r *Request) ParseForm() error {
 		return r.parseMultipartForm()
 	}
 
-	return errors.New("Unsupport form type.")
+	return errors.New("unsupport form type")
 }
 
 // eofReader 用来读取报文主体的
@@ -370,27 +370,6 @@ func readRequest(c *conn) (*Request, error) {
 	r.setupBody()
 
 	return &r, nil
-}
-
-// finishRequest 处理 Request 两个缓冲流的资源过剩, 写完与读完, 将由 server 调用
-func (r *Request) finishRequest() error {
-	// 将可能保存的临时文件删除
-	if r.MultipartForm != nil {
-		r.MultipartForm.RemoveAll()
-	}
-
-	// 将缓冲输出流中的剩余数据发送
-	err := r.conn.bufw.Flush()
-
-	// 消费完Body剩余的数据
-	if err == nil {
-		// 同样的，r.Body 可能存在未读完的资源导致 conn 不能关闭
-		// 因此使用 io.Copy 将 r.Body 全部读取出来， ioutil.Discard 只会读取不做其他事
-		// 待将剩余的资源读完，则可以释放 r.Body
-		_, err = io.Copy(ioutil.Discard, r.Body)
-	}
-
-	return err
 }
 
 // 查询 Request function:
